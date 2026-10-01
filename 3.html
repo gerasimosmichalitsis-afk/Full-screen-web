@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover lets the page use the whole iPhone screen, under the notch and home bar -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- When added to the Home Screen, open without Safari's address bar -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Split scroll</title>
+<style>
+  :root {
+    --bg: #000;
+    --divider: #2a2a2a;
+    --chip-bg: rgba(0,0,0,.55);
+    --chip-fg: #fff;
+    box-sizing: border-box;
+  }
+  :root[data-theme="light"] { --bg: #000; }
+  :root[data-theme="dark"] { --bg: #000; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #000; } }
+
+  *, *::before, *::after { box-sizing: inherit; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    overflow: hidden;              /* the page itself never scrolls or bounces */
+    overscroll-behavior: none;
+  }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+
+  .screen {
+    /* Pin to the whole screen. In iOS Home Screen mode, 100% height leaves out the
+       status-bar area and causes a gap at the bottom, so use the full viewport height. */
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 100vh;
+    height: 100lvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Top half: fixed image */
+  .fixed-pane {
+    flex: 0 0 50%;
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid var(--divider);
+  }
+  .fixed-pane img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;             /* fills the half, cropping edges if needed */
+    display: block;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  /* Bottom half: scrollable tall image */
+  .scroll-pane {
+    flex: 1 1 0;
+    min-height: 0;                 /* lets the flex child shrink so overflow works */
+    position: relative;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;  /* scrolling here doesn't drag the whole page */
+    touch-action: pan-y;
+    /* image runs under the home bar; this space only appears at the very end of the scroll */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .scroll-pane img {
+    width: 100%;
+    height: auto;                  /* keeps its full height, so it overflows and scrolls */
+    display: block;
+  }
+
+  /* Small buttons to try your own photos */
+  .swap {
+    position: absolute;
+    right: 10px;
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    z-index: 2;
+    font: 500 13px/1 -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: var(--chip-fg);
+    background: var(--chip-bg);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    padding: 8px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .scroll-pane .swap { position: sticky; float: right; margin: 10px 10px -40px 0; right: auto; top: 10px; }
+  .swap input { display: none; }
+  .swap:focus-within { outline: 2px solid #fff; outline-offset: 2px; }
+</style>
+</head>
+<body>
+  <main class="screen">
+    <section class="fixed-pane">
+      <label class="swap">Change photo<input type="file" accept="image/*" data-target="topImg"></label>
+      <img id="topImg" alt="Top image" src="">
+    </section>
+
+    <section class="scroll-pane">
+      <label class="swap">Change photo<input type="file" accept="image/*" data-target="tallImg"></label>
+      <img id="tallImg" alt="Tall scrolling image" src="">
+    </section>
+  </main>
+
+<script>
+  // Placeholder images (inline SVG) — replace the src values with your own image files or data URIs.
+  const topSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600">
+    <defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6fb3e8"/><stop offset="1" stop-color="#e9f3fa"/></linearGradient></defs>
+    <rect width="800" height="600" fill="url(#s)"/>
+    <circle cx="620" cy="140" r="60" fill="#ffd45c"/>
+    <path d="M0 420 L200 300 L360 390 L520 280 L800 410 L800 600 L0 600Z" fill="#7c9a6b"/>
+    <path d="M0 480 L800 460 L800 600 L0 600Z" fill="#5d7f4e"/>
+    <text x="400" y="560" font-family="Helvetica, Arial" font-size="34" fill="#fff" text-anchor="middle">Fixed image</text>
+  </svg>`;
+
+  const bands = ['#1d3557','#264f73','#2f6a8f','#3a86a8','#57a0b8','#7bbac6','#a3d2d3','#cfe8e0'];
+  let tall = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 3200">`;
+  bands.forEach((c, i) => {
+    tall += `<rect y="${i*400}" width="800" height="400" fill="${c}"/>
+      <text x="400" y="${i*400+225}" font-family="Helvetica, Arial" font-size="64"
+        fill="${i < 5 ? '#fff' : '#1d3557'}" text-anchor="middle">Section ${i+1} of 8</text>`;
+  });
+  tall += `<text x="400" y="3150" font-family="Helvetica, Arial" font-size="36" fill="#1d3557" text-anchor="middle">End of tall image</text></svg>`;
+
+  const toData = s => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s);
+  document.getElementById('topImg').src = toData(topSvg);
+  document.getElementById('tallImg').src = toData(tall);
+
+  // Let you test with photos from your phone (stays on the device, nothing is uploaded)
+  document.querySelectorAll('.swap input').forEach(input => {
+    input.addEventListener('change', () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => { document.getElementById(input.dataset.target).src = reader.result; };
+      reader.readAsDataURL(file);
+    });
+  });
+</script>
+</body>
+</html>
