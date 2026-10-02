@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Prototype</title>
+<style>
+  :root { --bg: #000; box-sizing: border-box; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #000; } }
+  :root[data-theme="dark"], :root[data-theme="light"] { --bg: #000; }
+  *, *::before, *::after { box-sizing: inherit; margin: 0; padding: 0; }
+
+  html, body {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    height: 100%;
+    background: var(--bg);
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  /* The phone screen: edge to edge on iPhone, a phone-width column on desktop */
+  .app {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 100vh;
+    height: 100lvh;
+    width: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+    overflow: hidden;
+  }
+
+  /* Each screen is a full-size layer; only the active one is shown */
+  .screen {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity .2s ease, visibility 0s linear .2s;
+  }
+  .screen.active { opacity: 1; visibility: visible; transition: opacity .2s ease; }
+
+  .scroller {
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    scrollbar-width: none;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .scroller::-webkit-scrollbar { display: none; }
+  .single .scroller { flex: 1 1 0; min-height: 0; }
+
+  .fixed-pane { flex: 0 0 auto; position: relative; max-height: 60%; overflow: hidden; }
+  .bottom { flex: 1 1 0; min-height: 0; position: relative; }
+  .bottom .scroller { height: 100%; }
+
+  img {
+    display: block;
+    width: 100%;
+    height: auto;
+    -webkit-touch-callout: none;
+    pointer-events: none;
+  }
+  .fixed-pane img { max-height: 100%; object-fit: cover; }
+
+  /* Hidden controls: shown after a 2-second press and hold */
+  .swap, .version, .zones {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s ease;
+  }
+  body.show-controls .swap, body.show-controls .version { opacity: 1; pointer-events: auto; }
+  body.show-controls .zones { opacity: 1; }
+
+  .swap {
+    position: absolute; right: 10px; top: 10px; z-index: 3;
+    font: 500 13px/1 -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #fff; background: rgba(0,0,0,.55);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    padding: 8px 12px; border-radius: 999px; cursor: pointer;
+  }
+  .single > .swap, .fixed-pane .swap { top: calc(env(safe-area-inset-top, 0px) + 10px); }
+  .swap input { display: none; }
+
+  .version {
+    position: absolute; z-index: 3; left: 10px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+    font: 600 12px/1 -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #fff; background: rgba(0,0,0,.5); padding: 5px 8px; border-radius: 6px;
+  }
+
+  /* Faint 3x3 grid of tap areas, shown together with the controls */
+  .zones {
+    position: absolute; inset: 0; z-index: 2;
+    display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+  }
+  .zones div { border: 1px dashed rgba(255,255,255,.6); background: rgba(0,0,0,.08); }
+</style>
+</head>
+<body>
+  <div class="app" id="app">
+    <div class="zones" aria-hidden="true">
+      <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+    </div>
+    <span class="version" id="version"></span>
+  </div>
+
+<script>
+  const VERSION = 'v2';
+
+  // ---- Screens ----
+  // type: 'single' (one tall scrolling image) or 'split' (fixed top + scrolling bottom)
+  const screens = {
+    1: { type: 'single', hue: 210 },
+    2: { type: 'single', hue: 160 },
+    3: { type: 'single', hue: 30 },
+    4: { type: 'split',  hue: 280 },
+    5: { type: 'single', hue: 350 },
+    6: { type: 'split',  hue: 120 },
+  };
+
+  // ---- Tap path ----
+  // Tap areas are a 3x3 grid of the screen: rows T(op) M(iddle) B(ottom), columns L(eft) M(iddle) R(ight).
+  // e.g. 'TL' = top left, 'TM' = middle top, 'ML' = mid left, 'MM' = centre. null = stay on this screen.
+  const transitions = {
+    1: z => 2,
+    2: z => z === 'TL' ? 1 : 3,
+    3: z => z === 'TL' ? 2 : z === 'TM' ? 4 : z === 'ML' ? 5 : null,
+    4: z => z === 'TL' ? 3 : null,
+    5: z => z === 'TL' ? 3 : (z === 'TM' || z === 'MM') ? 6 : null,
+    6: z => z === 'TL' ? 5 : null,
+  };
+
+  // ---- Placeholder images (replace with Refresh, or with real photos) ----
+  // One continuous image per part: a top-to-bottom gradient so scrolling is visible,
+  // the label near the top and an "end" marker at the bottom of tall images.
+  function placeholder(title, sub, hue, w, h) {
+    const tall = h > w * 1.5;
+    const ty = tall ? 420 : h / 2 - 10;
+    let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="hsl(${hue} 50% 42%)"/><stop offset="1" stop-color="hsl(${hue} 45% 18%)"/>
+      </linearGradient></defs>
+      <rect width="${w}" height="${h}" fill="url(#g)"/>
+      <text x="${w/2}" y="${ty}" font-family="Helvetica, Arial" font-size="72" font-weight="700" fill="#fff" text-anchor="middle">${title}</text>
+      <text x="${w/2}" y="${ty + 60}" font-family="Helvetica, Arial" font-size="34" fill="rgba(255,255,255,.85)" text-anchor="middle">${sub}</text>`;
+    if (tall) s += `<text x="${w/2}" y="${h - 80}" font-family="Helvetica, Arial" font-size="30" fill="rgba(255,255,255,.7)" text-anchor="middle">end of image</text>`;
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(s + '</svg>');
+  }
+
+  const app = document.getElementById('app');
+  const refreshBtn = id => `<label class="swap">Refresh<input type="file" accept="image/*" data-target="${id}"></label>`;
+
+  for (const [n, cfg] of Object.entries(screens)) {
+    const el = document.createElement('section');
+    el.className = 'screen ' + cfg.type;
+    el.dataset.screen = n;
+    if (cfg.type === 'single') {
+      el.innerHTML = `
+        <div class="scroller"><img id="img${n}" alt="Screen ${n}" src="${placeholder('Screen ' + n, 'Single image', cfg.hue, 800, 2400)}"></div>
+        ${refreshBtn('img' + n)}`;
+    } else {
+      el.innerHTML = `
+        <div class="fixed-pane">
+          <img id="img${n}top" alt="Screen ${n} top" src="${placeholder('Screen ' + n, 'Split · part 1 (fixed)', cfg.hue, 800, 600)}">
+          ${refreshBtn('img' + n + 'top')}
+        </div>
+        <div class="bottom">
+          <div class="scroller"><img id="img${n}tall" alt="Screen ${n} bottom" src="${placeholder('Screen ' + n, 'Split · part 2 (scrolling)', cfg.hue + 20, 800, 2000)}"></div>
+          ${refreshBtn('img' + n + 'tall')}
+        </div>`;
+    }
+    app.insertBefore(el, app.firstChild);
+  }
+
+  // ---- Navigation ----
+  let current = 1;
+  const history = [];
+  function show(n, goingBack) {
+    if (!screens[n]) return;
+    document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.dataset.screen == n));
+    if (!goingBack) document.querySelectorAll(`.screen[data-screen="${n}"] .scroller`).forEach(s => s.scrollTop = 0);
+    current = n;
+    document.getElementById('version').textContent = `Screen ${n} · ${VERSION}`;
+  }
+  function zoneAt(x, y) {
+    const r = app.getBoundingClientRect();
+    const col = Math.min(2, Math.max(0, Math.floor(3 * (x - r.left) / r.width)));
+    const row = Math.min(2, Math.max(0, Math.floor(3 * (y - r.top) / r.height)));
+    return 'TMB'[row] + 'LMR'[col];
+  }
+  function handleTap(x, y) {
+    const zone = zoneAt(x, y);
+    const next = transitions[current](zone);
+    if (next == null) return;
+    const back = zone === 'TL' && current !== 1;
+    show(next, back);
+  }
+
+  // ---- Touch handling: short tap = navigate, drag = scroll, 2-second hold = show controls ----
+  let pressTimer = null, hideTimer = null, startX = 0, startY = 0, startT = 0, moved = false, longPressed = false;
+  function showControls() {
+    longPressed = true;
+    document.body.classList.add('show-controls');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => document.body.classList.remove('show-controls'), 5000);
+  }
+  document.addEventListener('pointerdown', e => {
+    if (e.target.closest('.swap')) { showControls(); return; }
+    startX = e.clientX; startY = e.clientY; startT = Date.now();
+    moved = false; longPressed = false;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(showControls, 2000);
+  });
+  document.addEventListener('pointermove', e => {
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 10) { moved = true; clearTimeout(pressTimer); }
+  });
+  document.addEventListener('pointerup', e => {
+    clearTimeout(pressTimer);
+    if (e.target.closest('.swap')) return;
+    if (!moved && !longPressed && Date.now() - startT < 600) handleTap(e.clientX, e.clientY);
+  });
+  document.addEventListener('pointercancel', () => { moved = true; clearTimeout(pressTimer); });
+  document.addEventListener('contextmenu', e => e.preventDefault());
+
+  // ---- Refresh: swap a picture on this device only (nothing is uploaded or saved) ----
+  document.addEventListener('change', e => {
+    const input = e.target.closest('.swap input');
+    const file = input && input.files && input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { document.getElementById(input.dataset.target).src = reader.result; };
+    reader.readAsDataURL(file);
+  });
+
+  // ---- iOS Home Screen mode: use the real screen height (avoids black strip at bottom) ----
+  function fitToScreen() {
+    const standalone = window.navigator.standalone === true ||
+      window.matchMedia('(display-mode: standalone)').matches;
+    if (!standalone) return;
+    const portrait = window.matchMedia('(orientation: portrait)').matches;
+    const h = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+    app.style.height = h + 'px';
+    document.documentElement.style.height = h + 'px';
+    document.body.style.height = h + 'px';
+  }
+  fitToScreen();
+  window.addEventListener('resize', fitToScreen);
+  window.addEventListener('orientationchange', () => setTimeout(fitToScreen, 300));
+
+  show(1);
+</script>
+</body>
+</html>
